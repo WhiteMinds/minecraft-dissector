@@ -1,116 +1,118 @@
 name: CI
 
-on:
-  push:
-    branches:
-      - '*'
-    tags:
-      - v*
-  pull_request:
-    branches:
-      - master
+on: workflow_dispatch
 
 jobs:
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - run: sudo add-apt-repository ppa:wireshark-dev/stable
-      - run: sudo apt-get install make gcc pkg-config wireshark-dev
-      - uses: actions/setup-node@v1
-        with:
-          node-version: 14
-      - run: make packet-minecraft.so
-      - uses: actions/upload-artifact@v2
-        with:
-          name: linux
-          path: packet-minecraft.so
+#   build-linux:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v2
+#         with:
+#           submodules: true
+#       - run: sudo add-apt-repository ppa:wireshark-dev/stable
+#       - run: sudo apt-get install make gcc pkg-config wireshark-dev
+#       - uses: actions/setup-node@v1
+#         with:
+#           node-version: 14
+#       - run: make packet-minecraft.so
+#       - uses: actions/upload-artifact@v2
+#         with:
+#           name: linux
+#           path: packet-minecraft.so
 
   build-windows:
     runs-on: windows-latest
     env:
       PLATFORM: x64
-      WIRESHARK_LIB_DIR: C:/wireshark-win64-libs-3.4
-      GLIB_INCLUDE: vcpkg-export-20190318-win64ws/installed/x64-windows/include
+      WIRESHARK_LIB_DIR: C:/wireshark-win64-libs-3.6
+      GLIB_INCLUDE: vcpkg-export-20210609-1-win64ws/installed/x64-windows/include/glib-2.0
+      GLIB_CONFIG_INCLUDE: vcpkg-export-20210609-1-win64ws/installed/x64-windows/lib/glib-2.0/include
+      GCRYPT_INCLUDE: libgcrypt-1.8.3-win64ws/include
     steps:
       - name: Checkout Wireshark
         uses: actions/checkout@v2
         with:
           repository: wireshark/wireshark
-          ref: wireshark-3.4.2
+          ref: wireshark-3.6.7
           path: wireshark
       - name: Choco install Wireshark Deps
-        run: choco install -y --no-progress cmake winflexbison3 strawberryperl asciidoctorj xsltproc docbook-bundle
+        run: choco install -y --no-progress cmake winflexbison3 strawberryperl
       - name: Add msbuild to PATH
         uses: microsoft/setup-msbuild@v1.0.2
         with:
           vs-version: 16.4
       - run: mkdir build
         working-directory: wireshark
-      - run: cmake -A x64 .. -DBUILD_wireshark=OFF
+      - name: Configure Wireshark
+        run: cmake -A x64 .. -DBUILD_wireshark=OFF
         working-directory: wireshark/build
-      - run: cmake --build . --config RelWithDebInfo --target epan
+      - name: Build wireshark.lib
+        run: cmake --build . --config RelWithDebInfo --target epan
         working-directory: wireshark/build
 
-      - uses: actions/checkout@v2
+      - name: Checkout project
+        uses: actions/checkout@v2
         with:
-          path: dissector
+          path: minecraft-dissector
           submodules: true
-      - run: choco install -y --no-progress make mingw
+      - name: Install build tools
+        run: choco install -y --no-progress make mingw
       - uses: actions/setup-node@v1
         with:
           node-version: 14
       - run: make packet-minecraft.dll
         env:
-          CPPFLAGS: -I../wireshark/build -I../wireshark -I${{ env.WIRESHARK_LIB_DIR }}/${{ env.GLIB_INCLUDE }} -D_SSIZE_T_DEFINED
-          LDLIBS: ../wireshark/build/run/RelWithDebInfo/wireshark.lib
+          CPPFLAGS: -I../wireshark/build -I../wireshark -I${{ env.WIRESHARK_LIB_DIR }}/${{ env.GLIB_INCLUDE }} -I${{ env.WIRESHARK_LIB_DIR }}/${{ env.GLIB_CONFIG_INCLUDE }} -I${{ env.WIRESHARK_LIB_DIR }}/${{ env.GCRYPT_INCLUDE }} -D_SSIZE_T_DEFINED
+          LDLIBS: ../wireshark/build/run/RelWithDebInfo/wireshark.lib ${{ env.WIRESHARK_LIB_DIR }}/${{ env.GLIB_INCLUDE }}/../../lib/glib-2.0.lib ${{ env.WIRESHARK_LIB_DIR }}/${{ env.GCRYPT_INCLUDE }}/../bin/libgcrypt-20.lib
           CC: gcc
-        working-directory: dissector
-      - uses: actions/upload-artifact@v2
-        with:
-          name: windows
-          path: dissector/packet-minecraft.dll
+        working-directory: minecraft-dissector
 
-  publish:
-    needs: [build-linux, build-windows]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    steps:
-      - name: Download linux artifact
-        uses: actions/download-artifact@v2
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@v3.1.1
         with:
-          name: linux
-      - name: Download windows artifact
-        uses: actions/download-artifact@v2
-        with:
-          name: windows
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
-      - name: Upload packet-minecraft.so
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./packet-minecraft.so
-          asset_name: packet-minecraft.so
-          asset_content_type: application/octet-stream
-      - name: Upload packet-minecraft.dll
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./packet-minecraft.dll
-          asset_name: packet-minecraft.dll
-          asset_content_type: application/octet-stream
+          # Artifact name
+          name: packet-minecraft.dll
+          # A file, directory or wildcard pattern that describes what to upload
+          path: ./packet-minecraft.dll
+
+#   publish:
+#     needs: [build-linux, build-windows]
+#     runs-on: ubuntu-latest
+#     if: startsWith(github.ref, 'refs/tags/')
+#     steps:
+#       - name: Download linux artifact
+#         uses: actions/download-artifact@v2
+#         with:
+#           name: linux
+#       - name: Download windows artifact
+#         uses: actions/download-artifact@v2
+#         with:
+#           name: windows
+#       - name: Create Release
+#         id: create_release
+#         uses: actions/create-release@v1
+#         env:
+#           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#         with:
+#           tag_name: ${{ github.ref }}
+#           release_name: Release ${{ github.ref }}
+#           draft: false
+#           prerelease: false
+#       - name: Upload packet-minecraft.so
+#         uses: actions/upload-release-asset@v1
+#         env:
+#           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#         with:
+#           upload_url: ${{ steps.create_release.outputs.upload_url }}
+#           asset_path: ./packet-minecraft.so
+#           asset_name: packet-minecraft.so
+#           asset_content_type: application/octet-stream
+#       - name: Upload packet-minecraft.dll
+#         uses: actions/upload-release-asset@v1
+#         env:
+#           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#         with:
+#           upload_url: ${{ steps.create_release.outputs.upload_url }}
+#           asset_path: ./packet-minecraft.dll
+#           asset_name: packet-minecraft.dll
+#           asset_content_type: application/octet-stream

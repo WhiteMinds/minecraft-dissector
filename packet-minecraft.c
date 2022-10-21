@@ -34,6 +34,10 @@ static void minecraft_add_f64(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint
 static void minecraft_add_buffer(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint *offset, guint32 len);
 static void minecraft_add_restbuffer(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint *offset);
 static void minecraft_add_UUID(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint *offset);
+static void minecraft_add_bitfield(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint *offset);
+static void minecraft_add_switch(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint *offset);
+static guint64 minecraft_add_varlong(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint *offset);
+static void minecraft_add_array(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint *offset);
 
 
 #include "generated.c"
@@ -79,6 +83,24 @@ static bool read_varint(guint32 *result, tvbuff_t *tvb, gint *offset)
         *offset += 1;
         shift += 7;
         if ((b & 0x80) == 0) /* End of varint */
+            return true;
+    }
+    return false;
+}
+
+
+static bool read_varlong(guint32 *result, tvbuff_t *tvb, gint *offset)
+{
+    *result = 0;
+    guint shift = 0;
+
+    const guint length = tvb_reported_length(tvb);
+    while (*offset < length && shift <= 35) {
+        const guint8 b = tvb_get_guint8(tvb, *offset);
+        *result |= ((b & 0x7f) << shift);
+        *offset += 1;
+        shift += 7;
+        if ((b & 0x0100) == 0) /* End of varlong */
             return true;
     }
     return false;
@@ -165,6 +187,26 @@ static void minecraft_add_restbuffer(proto_tree *tree, int hfindex, tvbuff_t *tv
 
 static void minecraft_add_UUID(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint *offset) {
     minecraft_add_buffer(tree, hfindex, tvb, offset, 16);
+}
+
+static void minecraft_add_bitfield(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint *offset) {
+    minecraft_add_buffer(tree, hfindex, tvb, offset, tvb_reported_length(tvb) - *offset);
+}
+
+static void minecraft_add_switch(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint *offset) {
+    minecraft_add_buffer(tree, hfindex, tvb, offset, tvb_reported_length(tvb) - *offset);
+}
+
+static guint64 minecraft_add_varlong(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint *offset) {
+    const guint offset_start = *offset;
+    guint32 value = 0;
+    read_varlong(&value, tvb, offset);
+    proto_tree_add_uint(tree, hfindex, tvb, offset_start, *offset - offset_start, value);
+    return value;
+}
+
+static void minecraft_add_array(proto_tree *tree, int hfindex, tvbuff_t *tvb, gint *offset) {
+    minecraft_add_buffer(tree, hfindex, tvb, offset, tvb_reported_length(tvb) - *offset);
 }
 
 struct minecraft_secret {
